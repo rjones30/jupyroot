@@ -5,9 +5,8 @@ Requires prior installation of pyroot (ROOT package) and dask, dask.distributed 
 filling of histograms using a dask cluster is desired. Simple example of jupyter notebooks
 using the jupyroot classes are included in the repository.
 
-# Table of Contents
+## Application Programmer Interface
 
-* Application Programmer Interface
   * [jupyroot.treeview](#jupyroot.treeview)
     * [treeview](#jupyroot.treeview.treeview)
       * [\_\_init\_\_](#jupyroot.treeview.treeview.__init__)
