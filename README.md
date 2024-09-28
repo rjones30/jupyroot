@@ -1,42 +1,42 @@
 # jupyroot
 Automate common data analysis and visualization tasks using the CERN pyroot library in a jupyter notebook.
 
+Requires prior installation of pyroot (ROOT package) and dask, dask.distributed if parallel
+filling of histograms using a dask cluster is desired. Simple example of jupyter notebooks
+using the jupyroot classes are included in the repository.
 
 # Table of Contents
 
-* [jupyroot.treeview](#jupyroot.treeview)
-  * [treeview](#jupyroot.treeview.treeview)
-    * [\_\_init\_\_](#jupyroot.treeview.treeview.__init__)
-    * [declare\_histograms](#jupyroot.treeview.treeview.declare_histograms)
-    * [list\_histograms](#jupyroot.treeview.treeview.list_histograms)
-    * [enable\_dask\_cluster](#jupyroot.treeview.treeview.enable_dask_cluster)
-    * [fill\_histograms](#jupyroot.treeview.treeview.fill_histograms)
-    * [setup\_canvas](#jupyroot.treeview.treeview.setup_canvas)
-    * [update\_canvas](#jupyroot.treeview.treeview.update_canvas)
-    * [draw](#jupyroot.treeview.treeview.draw)
-    * [get](#jupyroot.treeview.treeview.get)
-    * [put](#jupyroot.treeview.treeview.put)
-    * [dask\_dashboard\_link](#jupyroot.treeview.treeview.dask_dashboard_link)
-    * [dump\_histodefs](#jupyroot.treeview.treeview.dump_histodefs)
-  * [dask\_treeplayer](#jupyroot.treeview.dask_treeplayer)
-  * [dask\_collector](#jupyroot.treeview.dask_collector)
-
-* [jupyroot.hddmview](#jupyroot.hddmview)
-  * [hddmview](#jupyroot.hddmview.hddmview)
-    * [\_\_init\_\_](#jupyroot.hddmview.hddmview.__init__)
-    * [declare\_histograms](#jupyroot.hddmview.hddmview.declare_histograms)
-    * [list\_histograms](#jupyroot.hddmview.hddmview.list_histograms)
-    * [enable\_dask\_cluster](#jupyroot.hddmview.hddmview.enable_dask_cluster)
-    * [fill\_histograms](#jupyroot.hddmview.hddmview.fill_histograms)
-    * [setup\_canvas](#jupyroot.hddmview.hddmview.setup_canvas)
-    * [update\_canvas](#jupyroot.hddmview.hddmview.update_canvas)
-    * [draw](#jupyroot.hddmview.hddmview.draw)
-    * [get](#jupyroot.hddmview.hddmview.get)
-    * [put](#jupyroot.hddmview.hddmview.put)
-    * [dask\_dashboard\_link](#jupyroot.hddmview.hddmview.dask_dashboard_link)
-    * [dump\_histodefs](#jupyroot.hddmview.hddmview.dump_histodefs)
-  * [dask\_hddmplayer](#jupyroot.hddmview.dask_hddmplayer)
-  * [dask\_collector](#jupyroot.hddmview.dask_collector)
+* Application Programmer Interface
+  * [jupyroot.treeview](#jupyroot.treeview)
+    * [treeview](#jupyroot.treeview.treeview)
+      * [\_\_init\_\_](#jupyroot.treeview.treeview.__init__)
+      * [declare\_histograms](#jupyroot.treeview.treeview.declare_histograms)
+      * [list\_histograms](#jupyroot.treeview.treeview.list_histograms)
+      * [enable\_dask\_cluster](#jupyroot.treeview.treeview.enable_dask_cluster)
+      * [fill\_histograms](#jupyroot.treeview.treeview.fill_histograms)
+      * [setup\_canvas](#jupyroot.treeview.treeview.setup_canvas)
+      * [update\_canvas](#jupyroot.treeview.treeview.update_canvas)
+      * [draw](#jupyroot.treeview.treeview.draw)
+      * [get](#jupyroot.treeview.treeview.get)
+      * [put](#jupyroot.treeview.treeview.put)
+      * [dask\_dashboard\_link](#jupyroot.treeview.treeview.dask_dashboard_link)
+      * [dump\_histodefs](#jupyroot.treeview.treeview.dump_histodefs)
+  
+  * [jupyroot.hddmview](#jupyroot.hddmview)
+    * [hddmview](#jupyroot.hddmview.hddmview)
+      * [\_\_init\_\_](#jupyroot.hddmview.hddmview.__init__)
+      * [declare\_histograms](#jupyroot.hddmview.hddmview.declare_histograms)
+      * [list\_histograms](#jupyroot.hddmview.hddmview.list_histograms)
+      * [enable\_dask\_cluster](#jupyroot.hddmview.hddmview.enable_dask_cluster)
+      * [fill\_histograms](#jupyroot.hddmview.hddmview.fill_histograms)
+      * [setup\_canvas](#jupyroot.hddmview.hddmview.setup_canvas)
+      * [update\_canvas](#jupyroot.hddmview.hddmview.update_canvas)
+      * [draw](#jupyroot.hddmview.hddmview.draw)
+      * [get](#jupyroot.hddmview.hddmview.get)
+      * [put](#jupyroot.hddmview.hddmview.put)
+      * [dask\_dashboard\_link](#jupyroot.hddmview.hddmview.dask_dashboard_link)
+      * [dump\_histodefs](#jupyroot.hddmview.hddmview.dump_histodefs)
 
 <a id="jupyroot.treeview"></a>
 
@@ -230,41 +230,6 @@ that are registered within the data structure. If any are TH1 objects
 then they are checked that they have not been deleted at some point
 leaving an invalid reference behind.
 
-<a id="jupyroot.treeview.dask_treeplayer"></a>
-
-#### dask\_treeplayer
-
-```python
-def dask_treeplayer(j, infiles, treename, histodefs)
-```
-
-Static member function of treeview, called with dask_delayed
-to fill histograms from ROOT tree input files in parallel on
-a dask cluster.
- 1. j - (int) starting index of file for this process
- 2. infiles - list of path or url to the input ROOT tree file
- 3. histodefs - copy of treeview.histodefs structure with lists of TH1
-               histograms being filled under the key 'filling'.
-Return value is the updated histodefs from argument 4.
-
-<a id="jupyroot.treeview.dask_collector"></a>
-
-#### dask\_collector
-
-```python
-def dask_collector(results)
-```
-
-Static member function of treeview, called with dask_delayed
-to sum a list of histogram sets formed from the return values
-of dask_treeplayer instances run in parallel on a dask cluster.
-Return value is the sum of the individual results.
-
-<a id="jupyroot.hddmview"></a>
-
-# jupyroot.hddmview
-
-<a id="jupyroot.hddmview.hddmview"></a>
 
 ## hddmview Objects
 
@@ -454,35 +419,3 @@ Scans through the histodefs dictionary  and lists all of the objects
 that are registered within the data structure. If any are TH1 objects
 then they are checked that they have not been deleted at some point
 leaving an invalid reference behind.
-
-<a id="jupyroot.hddmview.dask_hddmplayer"></a>
-
-#### dask\_hddmplayer
-
-```python
-def dask_hddmplayer(j, infiles, hddmclass, histodefs)
-```
-
-Static member function of hddmview, called with dask_delayed
-to fill histograms from hddm input files in parallel on a
-dask cluster.
- 1. j - (int) starting index of file for this process
- 2. infiles - list of path or url to the input hddm file
- 3. hddmclass - reference to hddm class, eg. hddm_s or hddm_r
- 4. histodefs - copy of hddmview.histodefs structure with lists of TH1
-               histograms being filled under the key 'filling'.
-Return value is the updated histodefs from argument 4.
-
-<a id="jupyroot.hddmview.dask_collector"></a>
-
-#### dask\_collector
-
-```python
-def dask_collector(results)
-```
-
-Static member function of hddmview, called with dask_delayed
-to sum a list of histogram sets formed from the return values
-of dask_hddmplayer instances run in parallel on a dask cluster.
-Return value is the sum of the individual results.
-
