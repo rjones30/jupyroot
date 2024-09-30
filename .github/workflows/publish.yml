@@ -1,7 +1,7 @@
 name: Publish Python package to PyPI
 
 on:
-  push
+  push:
     - 'v*.*.*'  # Match version tags like v1.2.3
 
 jobs:
