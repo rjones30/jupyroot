@@ -200,7 +200,7 @@ class hddmview:
                "doing that now in sequential mode...")
          for ifile in range(len(self.inputfiles)):
             for rec in self.hddmclass.istream(self.inputfiles[ifile]):
-               for histodef in self.histodefs.values():
+               for hkey,histodef in self.histodefs.items():
                   if 'filling' in histodef:
                      if hkey == "fill_histograms statistics":
                         histodef['fill'](ifile, histodef['filling'])
