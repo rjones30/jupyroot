@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name='gluex.jupyroot',
     version='1.0.0',
-    packages=find_packages(include=['gluex.*']),
+    packages=['gluex.jupyroot'],
     install_requires=[],  # Add dependencies here if any
     description='Automate common data analysis and visualization tasks using the CERN pyroot library in a jupyter notebook.',
     long_description=open('README.md').read(),
