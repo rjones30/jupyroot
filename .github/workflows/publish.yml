@@ -1,7 +1,6 @@
 name: Publish Python Package to PyPI
 
 on: push
-  workflow_dispatch:  # Allows manually triggering the workflow
 
 jobs:
   build-and-publish:
