@@ -224,7 +224,7 @@ class treeview:
       nfiles = sum([1 for i in range(nfiles) if hprocstats.GetBinContent(i+1) > 0])
       nrecords = hprocstats.Integral()
       print(f"fill_histograms read a total of {nfiles} tree files, {nrecords} records")
-      workdir.ls()
+      #workdir.ls()
       savedir.cd()
       return ntofill
 
