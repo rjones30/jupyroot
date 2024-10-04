@@ -233,10 +233,7 @@ class treeview:
       Create a new ROOT canvas for plotting in the output window
       of a cell in a jupyter notebook, returns the name.
       """
-      for suffix in range(99999999):
-         cname = f"{prefix}_{suffix}"
-         if not ROOT.gROOT.FindObject(cname):
-            break
+      cname = f"canvas{id(self)}"
       self.canvases[cname] = ROOT.TCanvas(cname, "", width, height)
       self.current_canvas = self.canvases[cname]
       return cname
