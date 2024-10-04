@@ -243,6 +243,10 @@ class hddmview:
       of a cell in a jupyter notebook, returns the name.
       """
       cname = f"canvas{id(self)}"
+      for i in range(999):
+          if cname + f".{i}" in self.canvases:
+              continue
+          cname += f".{i}"
       self.canvases[cname] = ROOT.TCanvas(cname, "", width, height)
       self.current_canvas = self.canvases[cname]
       return cname
