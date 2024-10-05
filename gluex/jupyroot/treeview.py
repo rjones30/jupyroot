@@ -199,10 +199,9 @@ class treeview:
          print("found", ntofill, "histograms that need filling,",
                "follow progress on dask monitor dashboard at",
                self.dask_dashboard_link())
-         treename = self.inputchain.GetName()
-         inputfiles = [link.GetTitle() for link in self.inputchain.GetListOfFiles()]
-         results = [dask.delayed(dask_treeplayer)(j, inputfiles[j:j+chunksize], treename, self.histodefs)
-                    for j in range(0, len(inputfiles), chunksize)]
+         infiles = [link for link in self.inputchain.GetListOfFiles()]
+         results = [dask.delayed(dask_treeplayer)(j, infiles[j:j+chunksize], self.histodefs)
+                    for j in range(0, len(infiles), chunksize)]
          round2 = [dask.delayed(dask_collector)(results[i*100:(i+1)*100])
                    for i in range((len(results) + 99) // 100)]
          lastround = dask.delayed(dask_collector)(round2)
@@ -456,21 +455,21 @@ class treeview:
             else:
                print(f"      '{keyword}':", histodef[keyword])
 
-def dask_treeplayer(j, infiles, treename, histodefs):
+def dask_treeplayer(j, infiles, histodefs):
    """
    Static member function of treeview, called with dask_delayed
    to fill histograms from ROOT tree input files in parallel on
    a dask cluster.
     1. j - (int) starting index of file for this process
-    2. infiles - list of path or url to the input ROOT tree file
+    2. infiles - list of name and path or url to the input ROOT tree
     3. histodefs - copy of treeview.histodefs structure with lists of TH1
                   histograms being filled under the key 'filling'.
    Return value is the updated histodefs from argument 4.
    """
    for infile in infiles:
       try:
-         froot = ROOT.TFile.Open(infile)
-         tree = ROOT.gDirectory.Get(treename)
+         froot = ROOT.TFile.Open(infile.GetTitle())
+         tree = ROOT.gDirectory.Get(infile.GetName())
          for row in tree:
             for hset,histodef in histodefs.items():
                if hset == "fill_histograms statistics":
