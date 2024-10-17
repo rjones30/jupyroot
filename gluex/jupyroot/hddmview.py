@@ -247,6 +247,7 @@ class hddmview:
           if cname + f".{i}" in self.canvases:
               continue
           cname += f".{i}"
+          break
       self.canvases[cname] = ROOT.TCanvas(cname, "", width, height)
       self.current_canvas = self.canvases[cname]
       return cname
