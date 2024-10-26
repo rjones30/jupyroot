@@ -151,13 +151,17 @@ class treeview:
       """
       self.dask_client = client
 
-   def fill_histograms(self, chunksize=1):
+   def fill_histograms(self, chunksize=1, *args, **kwargs):
       """
       Scan over the full chain of input ROOT files and fill all histograms
       that need filling if any, otherwise return immediately. Return value
       is the number of histograms that were updated.
        * chunksize - (int) number of input files to process in one dask process,
                      only relevant if parallel dask algorithm is enabled
+       * args - any number of user-defined positional arguments to be passed
+                     to the remote worker as arguments to the user fill function
+       * kwargs - any number of user-defined keyword arguments to be passed
+                     to the remote worker as arguments to the user fill function
       """
       workdir = ROOT.TDirectory(self.memorydir.GetName() + "_workspace",
                                 self.memorydir.GetTitle() + "_workspace")
@@ -192,15 +196,15 @@ class treeview:
                if 'filling' in histodef:
                   if hkey == "fill_histograms statistics":
                      ifile = self.inputchain.GetTreeNumber()
-                     histodef['fill'](ifile, histodef['filling'])
+                     histodef['fill'](ifile, histodef['filling'], *args, **kwargs)
                   else:
-                     histodef['fill'](row, histodef['filling'])
+                     histodef['fill'](row, histodef['filling'], *args, **kwargs)
       elif ntofill > 0:
          print("found", ntofill, "histograms that need filling,",
                "follow progress on dask monitor dashboard at",
                self.dask_dashboard_link())
          infiles = [link for link in self.inputchain.GetListOfFiles()]
-         results = [dask.delayed(dask_treeplayer)(j, infiles[j:j+chunksize], self.histodefs)
+         results = [dask.delayed(dask_treeplayer)(j, infiles[j:j+chunksize], self.histodefs, *args, **kwargs)
                     for j in range(0, len(infiles), chunksize)]
          round2 = [dask.delayed(dask_collector)(results[i*100:(i+1)*100])
                    for i in range((len(results) + 99) // 100)]
@@ -456,7 +460,7 @@ class treeview:
             else:
                print(f"      '{keyword}':", histodef[keyword])
 
-def dask_treeplayer(j, infiles, histodefs):
+def dask_treeplayer(j, infiles, histodefs, *args, **kwargs):
    """
    Static member function of treeview, called with dask_delayed
    to fill histograms from ROOT tree input files in parallel on
@@ -464,8 +468,12 @@ def dask_treeplayer(j, infiles, histodefs):
     1. j - (int) starting index of file for this process
     2. infiles - list of name and path or url to the input ROOT tree
     3. histodefs - copy of treeview.histodefs structure with lists of TH1
-                  histograms being filled under the key 'filling'.
-   Return value is the updated histodefs from argument 4.
+                 histograms being filled under the key 'filling'.
+    4. args - any number of user-defined positional arguments to be passed
+                 to the remote worker as arguments to the user fill function
+    5. kwargs - any number of user-defined keyword arguments to be passed
+                 to the remote worker as arguments to the user fill function
+   Return value is the updated histodefs from argument 3.
    """
    for infile in infiles:
       try:
@@ -474,10 +482,10 @@ def dask_treeplayer(j, infiles, histodefs):
          for row in tree:
             for hset,histodef in histodefs.items():
                if hset == "fill_histograms statistics":
-                  histodef['fill'](j, histodef['filling'])
+                  histodef['fill'](j, histodef['filling'], *args, **kwargs)
                elif 'filling' in histodef:
                   try:
-                     histodef['fill'](row, histodef['filling'])
+                     histodef['fill'](row, histodef['filling'], *args, **kwargs)
                   except:
                      pass
       except:

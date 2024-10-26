@@ -162,13 +162,17 @@ class hddmview:
       """
       self.dask_client = client
 
-   def fill_histograms(self, chunksize=1):
+   def fill_histograms(self, chunksize=1, *args, **kwargs):
       """
       Scan over the full list of input hddm files and fill all histograms
       that need filling if any, otherwise return immediately. Return value
       is the number of histograms that were updated.
        * chunksize - (int) number of input files to process in one dask process,
                      only relevant if parallel dask algorithm is enabled
+       * args - any number of user-defined positional arguments to be passed
+                     to the remote worker as arguments to the user fill function
+       * kwargs - any number of user-defined keyword arguments to be passed
+                     to the remote worker as arguments to the user fill function
       """
       workdir = ROOT.TDirectory(self.memorydir.GetName() + "_workspace",
                                 self.memorydir.GetTitle() + "_workspace")
@@ -203,14 +207,14 @@ class hddmview:
                for hkey,histodef in self.histodefs.items():
                   if 'filling' in histodef:
                      if hkey == "fill_histograms statistics":
-                        histodef['fill'](ifile, histodef['filling'])
+                        histodef['fill'](ifile, histodef['filling'], *args, **kwargs)
                      else:
-                        histodef['fill'](rec, histodef['filling'])
+                        histodef['fill'](rec, histodef['filling'], *args, **kwargs)
       elif ntofill > 0:
          print("found", ntofill, "histograms that need filling,",
                "follow progress on dask monitor dashboard at",
                self.dask_dashboard_link())
-         results = [dask.delayed(dask_hddmplayer)(j, self.inputfiles[j:j+chunksize], hddm_s, self.histodefs)
+         results = [dask.delayed(dask_hddmplayer)(j, self.inputfiles[j:j+chunksize], hddm_s, self.histodefs, *args, **kwargs)
                     for j in range(0, len(self.inputfiles), chunksize)]
          round2 = [dask.delayed(dask_collector)(results[i*100:(i+1)*100])
                    for i in range((len(results) + 99) // 100)]
@@ -466,7 +470,7 @@ class hddmview:
             else:
                print(f"      '{keyword}':", histodef[keyword])
 
-def dask_hddmplayer(j, infiles, hddmclass, histodefs):
+def dask_hddmplayer(j, infiles, hddmclass, histodefs, *args, **kwargs):
    """
    Static member function of hddmview, called with dask_delayed
    to fill histograms from hddm input files in parallel on a
@@ -476,6 +480,10 @@ def dask_hddmplayer(j, infiles, hddmclass, histodefs):
     3. hddmclass - reference to hddm class, eg. hddm_s or hddm_r
     4. histodefs - copy of hddmview.histodefs structure with lists of TH1
                   histograms being filled under the key 'filling'.
+    5. args - any number of user-defined positional arguments to be passed
+                  to the remote worker as arguments to the user fill function
+    6. kwargs - any number of user-defined keyword arguments to be passed
+                  to the remote worker as arguments to the user fill function
    Return value is the updated histodefs from argument 4.
    """
    for infile in infiles:
@@ -483,10 +491,10 @@ def dask_hddmplayer(j, infiles, hddmclass, histodefs):
          for rec in hddmclass.istream(infile):
             for hset,histodef in histodefs.items():
                if hset == "fill_histograms statistics":
-                  histodef['fill'](j, histodef['filling'])
+                  histodef['fill'](j, histodef['filling'], *args, **kwargs)
                elif 'filling' in histodef:
                   try:
-                     histodef['fill'](rec, histodef['filling'])
+                     histodef['fill'](rec, histodef['filling'], *args, **kwargs)
                   except:
                      pass
       except:
