@@ -18,6 +18,7 @@
 import ROOT
 import dask
 import dask.distributed
+import cloudpickle
 from gluex import hddm_s
 from gluex import hddm_r
 
@@ -162,17 +163,15 @@ class hddmview:
       """
       self.dask_client = client
 
-   def fill_histograms(self, chunksize=1, *args, **kwargs):
+   def fill_histograms(self, chunksize=1, **kwargs):
       """
       Scan over the full list of input hddm files and fill all histograms
       that need filling if any, otherwise return immediately. Return value
       is the number of histograms that were updated.
        * chunksize - (int) number of input files to process in one dask process,
                      only relevant if parallel dask algorithm is enabled
-       * args - any number of user-defined positional arguments to be passed
-                     to the remote worker as arguments to the user fill function
        * kwargs - any number of user-defined keyword arguments to be passed
-                     to the remote worker as arguments to the user fill function
+                     to the remote worker for use by the user fill function
       """
       workdir = ROOT.TDirectory(self.memorydir.GetName() + "_workspace",
                                 self.memorydir.GetTitle() + "_workspace")
@@ -207,14 +206,17 @@ class hddmview:
                for hkey,histodef in self.histodefs.items():
                   if 'filling' in histodef:
                      if hkey == "fill_histograms statistics":
-                        histodef['fill'](ifile, histodef['filling'], *args, **kwargs)
+                        histodef['fill'](ifile, histodef['filling'])
                      else:
-                        histodef['fill'](rec, histodef['filling'], *args, **kwargs)
+                        histodef['fill'](rec, histodef['filling'])
       elif ntofill > 0:
          print("found", ntofill, "histograms that need filling,",
                "follow progress on dask monitor dashboard at",
                self.dask_dashboard_link())
-         results = [dask.delayed(dask_hddmplayer)(j, self.inputfiles[j:j+chunksize], hddm_s, self.histodefs, *args, **kwargs)
+         my_context = f".dask_context_{id(self)}.pkl"
+         with open(my_context, "wb") as contextf:
+             cloudpickle.dump(kwargs, contextf)
+         results = [dask.delayed(dask_hddmplayer)(j, self.inputfiles[j:j+chunksize], hddm_s, self.histodefs, context=my_context)
                     for j in range(0, len(self.inputfiles), chunksize)]
          round2 = [dask.delayed(dask_collector)(results[i*100:(i+1)*100])
                    for i in range((len(results) + 99) // 100)]
@@ -222,6 +224,7 @@ class hddmview:
          for hset,histodef in lastround.compute().items():
             if 'filling' in histodef:
                self.histodefs[hset]['filling'] = histodef['filling']
+         os.remove(my_context)
       with ROOT.TFile.Open(self.savetorootfile, "update") as fsaved:
          if self.savetorootdir:
             ROOT.gDirectory.cd(self.savetorootdir)
@@ -470,7 +473,7 @@ class hddmview:
             else:
                print(f"      '{keyword}':", histodef[keyword])
 
-def dask_hddmplayer(j, infiles, hddmclass, histodefs, *args, **kwargs):
+def dask_hddmplayer(j, infiles, hddmclass, histodefs, context=None):
    """
    Static member function of hddmview, called with dask_delayed
    to fill histograms from hddm input files in parallel on a
@@ -480,21 +483,23 @@ def dask_hddmplayer(j, infiles, hddmclass, histodefs, *args, **kwargs):
     3. hddmclass - reference to hddm class, eg. hddm_s or hddm_r
     4. histodefs - copy of hddmview.histodefs structure with lists of TH1
                   histograms being filled under the key 'filling'.
-    5. args - any number of user-defined positional arguments to be passed
-                  to the remote worker as arguments to the user fill function
-    6. kwargs - any number of user-defined keyword arguments to be passed
-                  to the remote worker as arguments to the user fill function
+    5. context - name of a pickle file with a readonly dict containing
+                 variables that are needed by the user fill function.
    Return value is the updated histodefs from argument 4.
    """
+   if context:
+      with open(context, "rb") as contextf:
+         kwargs = cloudpickle.load(contextf)
+         locals().update(kwargs)
    for infile in infiles:
       try:
          for rec in hddmclass.istream(infile):
             for hset,histodef in histodefs.items():
                if hset == "fill_histograms statistics":
-                  histodef['fill'](j, histodef['filling'], *args, **kwargs)
+                  histodef['fill'](j, histodef['filling'])
                elif 'filling' in histodef:
                   try:
-                     histodef['fill'](rec, histodef['filling'], *args, **kwargs)
+                     histodef['fill'](rec, histodef['filling'])
                   except:
                      pass
       except:
