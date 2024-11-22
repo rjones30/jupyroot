@@ -152,15 +152,22 @@ class treeview:
       """
       self.dask_client = client
 
-   def fill_histograms(self, chunksize=1, **kwargs):
+   def fill_histograms(self, maxrows=1e99, startrow=0, chunksize=1, accumsize=100, **kwargs):
       """
       Scan over the full chain of input ROOT files and fill all histograms
       that need filling if any, otherwise return immediately. Return value
       is the number of histograms that were updated.
+       * maxrows - maximum number of rows to process from the chain, only
+                   applied if parallel dask algorithm is disabled
+       * startrow - first row to process from the chain, only
+                   applied if parallel dask algorithm is disabled
        * chunksize - (int) number of input files to process in one dask process,
-                     only relevant if parallel dask algorithm is enabled
+                   only relevant if parallel dask algorithm is enabled
+       * accusmize - (int) number of chunks to gather together into a single
+                   accumulator step in the sum over parallel dask results,
+                   only relevant if parallel dask algorithm is enabled
        * kwargs - any number of user-defined keyword arguments to be passed
-                     to the remote worker for use by the user fill function
+                   to the remote worker for use by the user fill function
       """
       workdir = ROOT.TDirectory(self.memorydir.GetName() + "_workspace",
                                 self.memorydir.GetTitle() + "_workspace")
@@ -190,7 +197,13 @@ class treeview:
       if ntofill > 0 and self.dask_client is None:
          print("found", ntofill, "histograms that need filling,",
                "doing that now in sequential mode...")
+         nrow = 0
          for row in self.inputchain:
+            nrow += 1
+            if nrow < startrow:
+                continue
+            elif nrow > maxrows + startrow:
+                break
             for hkey,histodef in self.histodefs.items():
                if 'filling' in histodef:
                   if hkey == "fill_histograms statistics":
@@ -206,11 +219,13 @@ class treeview:
          with open(my_context, "wb") as contextf:
              cloudpickle.dump(kwargs, contextf)
          infiles = [link for link in self.inputchain.GetListOfFiles()]
-         results = [dask.delayed(dask_treeplayer)(j, infiles[j:j+chunksize], self.histodefs, context=my_context)
+         results = [dask.delayed(dask_treeplayer)(j, infiles[j:j+chunksize],
+                                 self.histodefs, context=my_context)
                     for j in range(0, len(infiles), chunksize)]
-         round2 = [dask.delayed(dask_collector)(results[i*100:(i+1)*100])
-                   for i in range((len(results) + 99) // 100)]
-         lastround = dask.delayed(dask_collector)(round2)
+         while len(results) > accumsize:
+            results = [dask.delayed(dask_collector)(results[i*accumsize:(i+1)*accumsize])
+                       for i in range((len(results) + accumsize - 1) // accumsize)]
+         lastround = dask.delayed(dask_collector)(results)
          for hset,histodef in lastround.compute().items():
             if 'filling' in histodef:
                self.histodefs[hset]['filling'] = histodef['filling']
@@ -301,7 +316,7 @@ class treeview:
                u = options[ny-1]
             except:
                badoption = 1
-         if isinstance(histos[0], list):
+         if len(histos) > 0 and isinstance(histos[0], list):
             wx = [len(histos[i]) for i in range(ny)]
             nx = max(wx)
             if isinstance(options, list):
@@ -330,10 +345,11 @@ class treeview:
                           f"is an array or a list ({badoption})")
       if nx == 0 and ny == 0:
          cname = self.setup_canvas(width=width, height=height)
-         histo = self.get(histos)
-         histo.Draw(options)
-         nhistos += 1
-         self.drawn_histos[histo.GetName()] = histo
+         if len(histos) > 0:
+            histo = self.get(histos)
+            histo.Draw(options)
+            nhistos += 1
+            self.drawn_histos[histo.GetName()] = histo
       elif ny == 0:
          cname = self.setup_canvas(width=width*nx, height=height)
          self.current_canvas.Divide(nx, 1)
@@ -509,6 +525,18 @@ def dask_collector(results):
    for hset in resultsum:
       if 'filling' in resultsum[hset]:
          for h in resultsum[hset]['filling']:
-            for result in results[1:]:
-               resultsum[hset]['filling'][h].Add(result[hset]['filling'][h])
+            if isinstance(resultsum[hset]['filling'][h], ROOT.TTree):
+               dst_tree = resultsum[hset]['filling'][h]
+               dst_branches = {b.GetName(): b for b in dst_tree.GetListOfBranches()}
+               for result in results[1:]:
+                  src_tree = result[hset]['filling'][h]
+                  src_branches = {b.GetName(): b for b in src_tree.GetListOfBranches()}
+                  branch_map = {b: (getattr(src_tree, b), getattr(dst_tree, b)) for b in src_branches}
+                  for entry in src_tree:
+                     for (src_value, dst_value) in branch_map.values():
+                        dst_value = src_value
+                     dst_tree.Fill()
+            else:
+               for result in results[1:]:
+                  resultsum[hset]['filling'][h].Add(result[hset]['filling'][h])
    return resultsum
