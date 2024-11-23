@@ -531,16 +531,13 @@ def dask_collector(results):
       if 'filling' in resultsum[hset]:
          for h in resultsum[hset]['filling']:
             if isinstance(resultsum[hset]['filling'][h], ROOT.TTree):
-               dst_tree = resultsum[hset]['filling'][h]
-               dst_branches = {b.GetName(): b for b in dst_tree.GetListOfBranches()}
+               tree_one = resultsum[hset]['filling'][h]
+               dst_tree = tree_one.CloneTree(0)
                for result in results[1:]:
                   src_tree = result[hset]['filling'][h]
-                  src_branches = {b.GetName(): b for b in src_tree.GetListOfBranches()}
-                  branch_map = {b: (getattr(src_tree, b), getattr(dst_tree, b)) for b in src_branches}
-                  for entry in src_tree:
-                     for (src_value, dst_value) in branch_map.values():
-                        dst_value = src_value
-                     dst_tree.Fill()
+                  tree_one.CopyAddresses(src_tree)
+                  for row in src_tree:
+                     tree_one.Fill()
             else:
                for result in results[1:]:
                   resultsum[hset]['filling'][h].Add(result[hset]['filling'][h])
