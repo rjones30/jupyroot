@@ -71,11 +71,42 @@ class treeview:
          f = ROOT.TFile(self.savetorootfile, "recreate")
          f.mkdir(self.savetorootdir)
       f.Close()
+      self.rdf_results = {}
       self.histodefs = {}
       self.dask_client = None
       self.canvases = {}
       self.current_canvas = None
       self.drawn_histos = {}
+
+   def register_histogram(self, rdf_histo_name, rdf_histo):
+      """
+      Registers a RDataFrame::Histo* object defined on this TChain for
+      later evaluation by the evaluate() method, when needed. The name
+      of the rdf_histo object should be unique to this treeview instance.
+      Return value is 1 if the object is already evaluated, otherwise 0.
+      """
+      if rdf_histo_name in self.rdf_results:
+         print("Error in treeview.register_histogram - " +
+               "histogram names collide at", rdf_histo_name)
+         return None
+      self.rdf_results[rdf_histo_name] = rdf_histo
+      return rdf_histo.IsReady()
+
+   def evaluate(self, rdf_histo_name):
+      """
+      Looks up rdf_histo_name in the cache and if it exists, returns the
+      cached value, otherwise expects rdf_histo_name to be already saved
+      by a call to register_histogram, calls GetValue() on it, saves the
+      result to the cache, and returns the cached result.
+      """
+      hcached = self.get(rdf_histo_name)
+      if not hcached:
+         if rdf_histo_name in self.rdf_results:
+            hcached = self.rdf_results[rdf_histo_name].GetValue()
+            self.put(hcached)
+         else:
+            return None
+      return hcached
 
    def declare_histograms(self, setname, initfunc, fillfunc, leaves=[]):
       """
@@ -237,11 +268,12 @@ class treeview:
                "doing that now in sequential mode...")
          leaves = {leaf: 1 for hdef in self.histodefs.values() for leaf in hdef['leaves']}
          if not "*" in leaves:
+            self.inputchain.SetBranchStatus("*", 0)
             for branch in self.inputchain.GetListOfBranches():
-               self.inputchain.SetBranchStatus(branch.GetName(), 0)
                for leaf in branch.GetListOfLeaves():
                   if leaf.GetName() in leaves:
                      self.inputchain.SetBranchStatus(branch.GetName(), 1)
+                     print("enabled branch", branch.GetName())
          for nrow in range(startrow, startrow + maxrows):
             self.inputchain.GetEntry(nrow)
             for hkey,histodef in self.histodefs.items():
@@ -477,7 +509,8 @@ class treeview:
                h = histo
             else:
                histo.Delete()
-      h.SetDirectory(self.memorydir)
+      if h:
+         h.SetDirectory(self.memorydir)
       return h
 
    def put(self, hist):
@@ -560,8 +593,8 @@ def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), context=None):
          nend = min(nentries, nstart + nentries_per_slice)
          leaves = {leaf: 1 for hdef in histodefs.values() for leaf in hdef['leaves']}
          if not "*" in leaves:
+            tree.SetBranchStatus("*", 0)
             for branch in tree.GetListOfBranches():
-               tree.SetBranchStatus(branch.GetName(), 0)
                for leaf in branch.GetListOfLeaves():
                   if leaf.GetName() in leaves:
                      tree.SetBranchStatus(branch.GetName(), 1)
