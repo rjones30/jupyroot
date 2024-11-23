@@ -21,11 +21,13 @@ import dask.distributed
 import cloudpickle
 from pyxrootd import client as xclient
 import IPython.display
+import inspect
 
 import os
 import sys
 import socket
 import re
+import math
 
 class treeview:
    """
@@ -75,7 +77,7 @@ class treeview:
       self.current_canvas = None
       self.drawn_histos = {}
 
-   def declare_histograms(self, setname, initfunc, fillfunc):
+   def declare_histograms(self, setname, initfunc, fillfunc, leaves=[]):
       """
       Declares a list of user-defined histogram to treeview, with arguments:
        1. setname =  user-defined unique name for this set of histograms
@@ -84,6 +86,14 @@ class treeview:
        3. fillfunc = user-defined function that accepts a row of a ROOT tree 
                      and the list of histograms to be filled as its arguments,
                      and fills the histograms from the contents of the tree
+       4. leaves =   list of the names of leaves of the input tree that
+                     are accessed by fillfunc. If left out or assigned to []
+                     then a built-in algorithm is used to inspect the code
+                     in fillfunc and extract the leaves of the tree that
+                     need to be unpacked during fillfunc processing. This
+                     list can be explicitly provided by the user in case
+                     the automatic algorithm (see method inspect_source)
+                     is inadequate.
       Return value is the count of histograms declared.
       """
       savedir = ROOT.gDirectory
@@ -99,7 +109,33 @@ class treeview:
          nhistos += 1
       ROOT.gDirectory = savedir
       self.histodefs[setname] = {'init': initfunc, 'fill': fillfunc, 'filled': {}}
+      if len(leaves) > 0:
+         self.histodefs[setname]['leaves'] = leaves
+      else:
+         self.histodefs[setname]['leaves'] = self.inspect_source(fillfunc)
       return nhistos
+
+   def inspect_source(self, fillfunc):
+      """
+      Scans the source of fillfunc for the names of columns in the input tree
+      that are actually referenced in the user fillfunc. During the filling
+      phase, only those columns will be read during query processing, which
+      can significantly speed up data access in common analysis scenarios.
+      """
+      source_code = inspect.getsource(fillfunc)
+      vargrp = r"([A-Za-z_][A-Za-z0-9_]*)"
+      nvarchar = r"[^A-Za-z0-9_]"
+      m1 = re.match(f"def[\\s]+{vargrp}[\\s]*\([\\s]*{vargrp}[\\s]*," +
+                    f"[\\s]*{vargrp}[\\s]*[,)]", source_code)
+      if m1:
+         ffname = m1.group(1)
+         rowarg = m1.group(2)
+      else:
+         raise ValueError("User fillfunc must start with a python function def")
+      columns = {}
+      for var in re.findall(f"{nvarchar}{rowarg}\\.{vargrp}", source_code):
+         columns[var] = 1
+      return list(columns.keys())
 
    def list_histograms(self, cached=False):
       """
@@ -152,7 +188,7 @@ class treeview:
       """
       self.dask_client = client
 
-   def fill_histograms(self, maxrows=1e99, startrow=0, chunksize=1, accumsize=100, **kwargs):
+   def fill_histograms(self, maxrows=(1<<63), startrow=0, chunksize=1, accumsize=100, **kwargs):
       """
       Scan over the full chain of input ROOT files and fill all histograms
       that need filling if any, otherwise return immediately. Return value
@@ -162,6 +198,8 @@ class treeview:
        * startrow - first row to process from the chain, only
                    applied if parallel dask algorithm is disabled
        * chunksize - (int) number of input files to process in one dask process,
+                   if negative then |chunksize| is the number of processes
+                   to dedicate per input file (for processing large files),
                    only relevant if parallel dask algorithm is enabled
        * accusmize - (int) number of chunks to gather together into a single
                    accumulator step in the sum over parallel dask results,
@@ -179,7 +217,7 @@ class treeview:
                  ROOT.TH1D("fill_histograms_stats", "file processing statistics", nfiles, 0, nfiles)}
       def fill_histograms_hfill(ifile, histos):
          histos['fill_histograms_stats'].Fill(ifile)
-      self.declare_histograms("fill_histograms statistics", fill_histograms_hinit, fill_histograms_hfill)
+      self.declare_histograms("fill_histograms statistics", fill_histograms_hinit, fill_histograms_hfill, leaves=["NULL"])
       ntofill = 0
       for hset,histodef in self.histodefs.items():
          histos = histodef['init']()
@@ -197,20 +235,22 @@ class treeview:
       if ntofill > 0 and self.dask_client is None:
          print("found", ntofill, "histograms that need filling,",
                "doing that now in sequential mode...")
-         nrow = 0
-         for row in self.inputchain:
-            nrow += 1
-            if nrow < startrow:
-                continue
-            elif nrow > maxrows + startrow:
-                break
+         leaves = {leaf: 1 for hdef in self.histodefs.values() for leaf in hdef['leaves']}
+         if not "*" in leaves:
+            for branch in self.inputchain.GetListOfBranches():
+               self.inputchain.SetBranchStatus(branch.GetName(), 0)
+               for leaf in branch.GetListOfLeaves():
+                  if leaf.GetName() in leaves:
+                     self.inputchain.SetBranchStatus(branch.GetName(), 1)
+         for nrow in range(startrow, startrow + maxrows):
+            self.inputchain.GetEntry(nrow)
             for hkey,histodef in self.histodefs.items():
                if 'filling' in histodef:
                   if hkey == "fill_histograms statistics":
                      ifile = self.inputchain.GetTreeNumber()
                      histodef['fill'](ifile, histodef['filling'])
                   else:
-                     histodef['fill'](row, histodef['filling'])
+                     histodef['fill'](self.inputchain, histodef['filling'])
       elif ntofill > 0:
          print("found", ntofill, "histograms that need filling,",
                "follow progress on dask monitor dashboard at",
@@ -219,9 +259,19 @@ class treeview:
          with open(my_context, "wb") as contextf:
              cloudpickle.dump(kwargs, contextf)
          infiles = [link for link in self.inputchain.GetListOfFiles()]
-         results = [dask.delayed(dask_treeplayer)(j, infiles[j:j+chunksize],
-                                 self.histodefs, context=my_context)
-                    for j in range(0, len(infiles), chunksize)]
+         if chunksize > 0:
+            results = [dask.delayed(dask_treeplayer)(j, infiles[j:j+chunksize],
+                                    self.histodefs, context=my_context)
+                       for j in range(0, len(infiles), chunksize)]
+         elif chunksize < 0:
+            results = [dask.delayed(dask_treeplayer)(j, infiles[j:j+1],
+                                    self.histodefs, chunk=(i, -chunksize),
+                                    context=my_context)
+                       for j in range(0, len(infiles))
+                       for i in range(0, -chunksize)]
+         else:
+            raise ValueError("hddmview.fill_histogram error -",
+                             "zero chunksize is not allowed in this release")
          while len(results) > accumsize:
             results = [dask.delayed(dask_collector)(results[i*accumsize:(i+1)*accumsize])
                        for i in range((len(results) + accumsize - 1) // accumsize)]
@@ -479,7 +529,7 @@ class treeview:
             else:
                print(f"      '{keyword}':", histodef[keyword])
 
-def dask_treeplayer(j, infiles, histodefs, context=None):
+def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), context=None):
    """
    Static member function of treeview, called with dask_delayed
    to fill histograms from ROOT tree input files in parallel on
@@ -488,7 +538,11 @@ def dask_treeplayer(j, infiles, histodefs, context=None):
     2. infiles - list of name and path or url to the input ROOT tree
     3. histodefs - copy of treeview.histodefs structure with lists of TH1
                  histograms being filled under the key 'filling'.
-    4. context - name of a pickle file with a readonly dict containing
+    4. chunk - [int, int] is defined as the pair (n,N) where N is the 
+                 number of subdivisions of the total row count of the tree
+                 in this input file, and n is the index in [0,N) of the
+                 slice of rows in this input file to be processed.
+    5. context - name of a pickle file with a readonly dict containing
                  variables that are needed by the user fill function.
    Return value is the updated histodefs from argument 3.
    """
@@ -500,13 +554,25 @@ def dask_treeplayer(j, infiles, histodefs, context=None):
       try:
          froot = ROOT.TFile.Open(infile.GetTitle())
          tree = ROOT.gDirectory.Get(infile.GetName())
-         for row in tree:
+         nentries = tree.GetEntries()
+         nentries_per_slice = math.ceil(nentries / chunk[1])
+         nstart = nentries_per_slice * chunk[0]
+         nend = min(nentries, nstart + nentries_per_slice)
+         leaves = {leaf: 1 for hdef in histodefs.values() for leaf in hdef['leaves']}
+         if not "*" in leaves:
+            for branch in tree.GetListOfBranches():
+               tree.SetBranchStatus(branch.GetName(), 0)
+               for leaf in branch.GetListOfLeaves():
+                  if leaf.GetName() in leaves:
+                     tree.SetBranchStatus(branch.GetName(), 1)
+         for row in range(nstart, nend):
+            tree.GetEntry(row)
             for hset,histodef in histodefs.items():
                if hset == "fill_histograms statistics":
                   histodef['fill'](j, histodef['filling'])
                elif 'filling' in histodef:
                   try:
-                     histodef['fill'](row, histodef['filling'])
+                     histodef['fill'](tree, histodef['filling'])
                   except:
                      pass
       except:

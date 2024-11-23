@@ -169,6 +169,8 @@ class hddmview:
       that need filling if any, otherwise return immediately. Return value
       is the number of histograms that were updated.
        * chunksize - (int) number of input files to process in one dask process,
+                     if negative then |chunksize| is the number of processes
+                     to dedicate per input file (for processing large files),
                      only relevant if parallel dask algorithm is enabled
        * accusmize - (int) number of chunks to gather together into a single
                      accumulator step in the sum over parallel dask results,
@@ -219,9 +221,13 @@ class hddmview:
          my_context = f".dask_context_{id(self)}.pkl"
          with open(my_context, "wb") as contextf:
              cloudpickle.dump(kwargs, contextf)
-         results = [dask.delayed(dask_hddmplayer)(j, self.inputfiles[j:j+chunksize],
-                                 hddm_s, self.histodefs, context=my_context)
-                    for j in range(0, len(self.inputfiles), chunksize)]
+         if chunksize > 0:
+            results = [dask.delayed(dask_hddmplayer)(j, self.inputfiles[j:j+chunksize],
+                                    hddm_s, self.histodefs, context=my_context)
+                       for j in range(0, len(self.inputfiles), chunksize)]
+         else:
+            raise ValueError("hddmview.fill_histogram error -",
+                             "non-positive chunksize is not supported in this release")
          while len(results) > accumsize:
              results = [dask.delayed(dask_collector)(results[i*accumsize:(i+1)*accumsize])
                         for i in range((len(results) + accumsize - 1) // accumsize)]
