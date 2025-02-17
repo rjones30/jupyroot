@@ -229,12 +229,13 @@ class hddmview:
             raise ValueError("hddmview.fill_histogram error -",
                              "non-positive chunksize is not supported in this release")
          while len(results) > accumsize:
-             results = [dask.delayed(dask_collector)(results[i*accumsize:(i+1)*accumsize])
-                        for i in range((len(results) + accumsize - 1) // accumsize)]
+            results = [dask.delayed(dask_collector)(results[i*accumsize:(i+1)*accumsize])
+                       for i in range((len(results) + accumsize - 1) // accumsize)]
          lastround = dask.delayed(dask_collector)(results)
          for hset,histodef in lastround.compute().items():
             if 'filling' in histodef:
                self.histodefs[hset]['filling'] = histodef['filling']
+         self.dask_client.cancel(lastround)
          os.remove(my_context)
       with ROOT.TFile.Open(self.savetorootfile, "update") as fsaved:
          if self.savetorootdir:
@@ -242,7 +243,11 @@ class hddmview:
          for histodef in self.histodefs.values():
             if 'filling' in histodef:
                for h in histodef['filling'].values():
-                  h.Write()
+                  if isinstance(h, ROOT.TTree):
+                     dst_tree = h.CloneTree()
+                     dst_tree.Write()
+                  else:
+                     h.Write()
                   h.SetDirectory(self.memorydir)
                   #print("filled histogram", h.GetName(), "with", h.GetEntries(), "entries")
                histodef['filled'] = histodef['filling']
@@ -353,21 +358,23 @@ class hddmview:
          cname = self.setup_canvas(width=width, height=height)
          if len(histos) > 0:
             histo = self.get(histos)
-            histo.Draw(options)
-            nhistos += 1
-            self.drawn_histos[histo.GetName()] = histo
+            if histo:
+               histo.Draw(options)
+               nhistos += 1
+               self.drawn_histos[histo.GetName()] = histo
       elif ny == 0:
          cname = self.setup_canvas(width=width*nx, height=height)
          self.current_canvas.Divide(nx, 1)
          for ix in range(nx):
             self.current_canvas.cd(ix + 1)
             histo = self.get(histos[ix])
-            if isinstance(options, list):
-               histo.Draw(options[ix])
-            else:
-               histo.Draw(options)
-            nhistos += 1
-            self.drawn_histos[histo.GetName()] = histo
+            if histo:
+               if isinstance(options, list):
+                  histo.Draw(options[ix])
+               else:
+                  histo.Draw(options)
+               nhistos += 1
+               self.drawn_histos[histo.GetName()] = histo
       else:
          cname = self.setup_canvas(width=width*nx, height=height*ny)
          self.current_canvas.Divide(nx, ny)
@@ -377,7 +384,9 @@ class hddmview:
                   self.current_canvas.cd(iy * nx + ix + 1)
                   if isinstance(histos[iy][ix], list):
                      histo = self.get(histos[iy][ix][0])
-                     if isinstance(options, list):
+                     if not histo:
+                        pass
+                     elif isinstance(options, list):
                         histo.Draw(options[iy][ix][0])
                         nhistos += 1
                         self.drawn_histos[histo.GetName()] = histo
@@ -397,13 +406,16 @@ class hddmview:
                            self.drawn_histos[histo.GetName()] = histo
                   else:
                      histo = self.get(histos[iy][ix])
-                     if isinstance(options, list):
+                     if not histo:
+                        pass
+                     elif isinstance(options, list):
                         histo.Draw(options[iy][ix])
                         nhistos += 1
+                        self.drawn_histos[histo.GetName()] = histo
                      else:
                         histo.Draw(options)
                         nhistos += 1
-                     self.drawn_histos[histo.GetName()] = histo
+                        self.drawn_histos[histo.GetName()] = histo
                 except:
                   pass
       self.current_canvas.cd(0)
@@ -433,7 +445,8 @@ class hddmview:
                h = histo
             else:
                histo.Delete()
-      h.SetDirectory(self.memorydir)
+      if h:
+         h.SetDirectory(self.memorydir)
       return h
 
    def put(self, hist):

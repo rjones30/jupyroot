@@ -274,6 +274,7 @@ class treeview:
                   if leaf.GetName() in leaves:
                      self.inputchain.SetBranchStatus(branch.GetName(), 1)
                      print("enabled branch", branch.GetName())
+         maxrows = min(maxrows, self.inputchain.GetEntries() - startrow)
          for nrow in range(startrow, startrow + maxrows):
             self.inputchain.GetEntry(nrow)
             for hkey,histodef in self.histodefs.items():
@@ -311,6 +312,7 @@ class treeview:
          for hset,histodef in lastround.compute().items():
             if 'filling' in histodef:
                self.histodefs[hset]['filling'] = histodef['filling']
+         self.dask_client.cancel(lastround)
          os.remove(my_context)
       with ROOT.TFile.Open(self.savetorootfile, "update") as fsaved:
          if self.savetorootdir:
@@ -318,7 +320,11 @@ class treeview:
          for histodef in self.histodefs.values():
             if 'filling' in histodef:
                for h in histodef['filling'].values():
-                  h.Write()
+                  if isinstance(h, ROOT.TTree):
+                     dst_tree = h.CloneTree()
+                     dst_tree.Write()
+                  else:
+                     h.Write()
                   h.SetDirectory(self.memorydir)
                   #print("filled histogram", h.GetName(), "with", h.GetEntries(), "entries")
                histodef['filled'] = histodef['filling']
@@ -429,21 +435,23 @@ class treeview:
          cname = self.setup_canvas(width=width, height=height)
          if len(histos) > 0:
             histo = self.get(histos)
-            histo.Draw(options)
-            nhistos += 1
-            self.drawn_histos[histo.GetName()] = histo
+            if histo:
+               histo.Draw(options)
+               nhistos += 1
+               self.drawn_histos[histo.GetName()] = histo
       elif ny == 0:
          cname = self.setup_canvas(width=width*nx, height=height)
          self.current_canvas.Divide(nx, 1)
          for ix in range(nx):
             self.current_canvas.cd(ix + 1)
             histo = self.get(histos[ix])
-            if isinstance(options, list):
-               histo.Draw(options[ix])
-            else:
-               histo.Draw(options)
-            nhistos += 1
-            self.drawn_histos[histo.GetName()] = histo
+            if histo:
+               if isinstance(options, list):
+                  histo.Draw(options[ix])
+               else:
+                  histo.Draw(options)
+               nhistos += 1
+               self.drawn_histos[histo.GetName()] = histo
       else:
          cname = self.setup_canvas(width=width*nx, height=height*ny)
          self.current_canvas.Divide(nx, ny)
@@ -453,7 +461,9 @@ class treeview:
                   self.current_canvas.cd(iy * nx + ix + 1)
                   if isinstance(histos[iy][ix], list):
                      histo = self.get(histos[iy][ix][0])
-                     if isinstance(options, list):
+                     if not histo:
+                        pass
+                     elif isinstance(options, list):
                         histo.Draw(options[iy][ix][0])
                         nhistos += 1
                         self.drawn_histos[histo.GetName()] = histo
@@ -473,13 +483,16 @@ class treeview:
                            self.drawn_histos[histo.GetName()] = histo
                   else:
                      histo = self.get(histos[iy][ix])
-                     if isinstance(options, list):
+                     if not histo:
+                        pass
+                     elif isinstance(options, list):
                         histo.Draw(options[iy][ix])
                         nhistos += 1
+                        self.drawn_histos[histo.GetName()] = histo
                      else:
                         histo.Draw(options)
                         nhistos += 1
-                     self.drawn_histos[histo.GetName()] = histo
+                        self.drawn_histos[histo.GetName()] = histo
                 except:
                   pass
       self.current_canvas.cd(0)
@@ -507,8 +520,7 @@ class treeview:
          for histo in histoset['init']().values():
             if hname == histo.GetName():
                h = histo
-            else:
-               histo.Delete()
+               break
       if h:
          h.SetDirectory(self.memorydir)
       return h
@@ -625,16 +637,13 @@ def dask_collector(results):
       if 'filling' in resultsum[hset]:
          for h in resultsum[hset]['filling']:
             if isinstance(resultsum[hset]['filling'][h], ROOT.TTree):
-               dst_tree = resultsum[hset]['filling'][h]
-               dst_branches = {b.GetName(): b for b in dst_tree.GetListOfBranches()}
+               tree_one = resultsum[hset]['filling'][h]
+               dst_tree = tree_one.CloneTree(0)
                for result in results[1:]:
                   src_tree = result[hset]['filling'][h]
-                  src_branches = {b.GetName(): b for b in src_tree.GetListOfBranches()}
-                  branch_map = {b: (getattr(src_tree, b), getattr(dst_tree, b)) for b in src_branches}
-                  for entry in src_tree:
-                     for (src_value, dst_value) in branch_map.values():
-                        dst_value = src_value
-                     dst_tree.Fill()
+                  tree_one.CopyAddresses(src_tree)
+                  for row in src_tree:
+                     tree_one.Fill()
             else:
                for result in results[1:]:
                   resultsum[hset]['filling'][h].Add(result[hset]['filling'][h])
