@@ -511,7 +511,10 @@ class treeview:
             ROOT.gDirectory.cd(self.savetorootdir)
          try:
             h = ROOT.gDirectory.Get(hname)
-            h.SetDirectory(self.memorydir)
+            if h:
+               h.SetDirectory(self.memorydir)
+            else:
+               raise ValueError(f"histogram {hname} not found")
             return h
          except:
             pass

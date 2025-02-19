@@ -434,7 +434,10 @@ class hddmview:
             ROOT.gDirectory.cd(self.savetorootdir)
          try:
             h = ROOT.gDirectory.Get(hname)
-            h.SetDirectory(self.memorydir)
+            if h:
+               h.SetDirectory(self.memorydir)
+            else:
+               raise ValueError(f"histogram {hname} not found")
             return h
          except:
             pass
@@ -443,8 +446,7 @@ class hddmview:
          for histo in histoset['init']().values():
             if hname == histo.GetName():
                h = histo
-            else:
-               histo.Delete()
+               break
       if h:
          h.SetDirectory(self.memorydir)
       return h
