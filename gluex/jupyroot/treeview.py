@@ -166,6 +166,8 @@ class treeview:
       columns = {}
       for var in re.findall(f"{nvarchar}{rowarg}\\.{vargrp}", source_code):
          columns[var] = 1
+      for var in re.findall(f"\.GetLeaf\([\"']{vargrp}[\"']\)", source_code):
+         columns[var] = 1
       return list(columns.keys())
 
    def list_histograms(self, cached=False):
