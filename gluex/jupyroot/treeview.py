@@ -312,6 +312,69 @@ class treeview:
          for hset,histodef in lastround.compute().items():
             if 'filling' in histodef:
                self.histodefs[hset]['filling'] = histodef['filling']
+
+         if True:
+             print("running self.dask_client.who_has():")
+             self.dask_client.who_has()
+             print("running self.dask_client.has_what():")
+             self.dask_client.has_what()
+
+         import gc
+         import psutil
+         from collections.abc import Mapping, Sequence
+         from collections import Counter, deque
+         import pytz.lazy
+
+         def check_worker_memory():
+             gc.collect()  # Force garbage collection
+             return psutil.Process().memory_info().rss / 1e6  # Report memory in MB
+
+         size_cache = {}
+         def deep_sizeof(obj, seen=None, max_depth=10, current_depth=0):
+             """Recursively calculate the memory usage of objects."""
+             if seen is None:
+                 seen = set()
+             obj_id = id(obj)
+             if obj_id in seen:
+                 return 0  # Avoid infinite recursion
+             if obj_id in size_cache:
+                 return size_cache[obj_id]
+             seen.add(obj_id)
+             size = sys.getsizeof(obj)
+             if current_depth >= max_depth:
+                 size_cache[obj_id] = size
+                 return size
+             if isinstance(obj, Mapping):
+                 size += sum(deep_sizeof(k, seen, max_depth, current_depth + 1) + deep_sizeof(v, seen, max_depth, current_depth + 1) for k, v in list(obj.items()))
+             elif isinstance(obj, deque):
+                 size += sum(deep_sizeof(i, seen, max_depth, current_depth + 1) for i in list(obj))
+             elif isinstance(obj, (Sequence, set)) and not isinstance(obj, (str, bytes, bytearray)):
+                 size += sum(deep_sizeof(i, seen, max_depth, current_depth + 1) for i in obj)
+             elif hasattr(obj, '__dict__'):
+                 size += deep_sizeof(obj.__dict__, seen, max_depth, current_depth + 1)
+             elif hasattr(obj, '__slots__'):
+                 size += sum(deep_sizeof(getattr(obj, slot), seen, max_depth, current_depth + 1) for slot in obj.__slots__ if hasattr(obj, slot))
+             elif isinstance(obj, pytz.lazy.LazySet):
+                 size += sum(deep_sizeof(i, seen, max_depth, current_depth + 1) for i in obj._set)  # LazySet uses an internal _set attribute
+             size_cache[obj_id] = size
+             return size
+
+         def check_large_objects():
+             objs = gc.get_objects()
+             sizes = [(type(o), deep_sizeof(o)) for o in objs if deep_sizeof(o) > 1e6]  # Objects > 1MB
+             counter = Counter([t for t, _ in sizes])
+             total_size = sum([s for t,s in sizes])
+             size_stats = []
+             for c in counter.most_common(10): # Top 10 object types by count
+                 ss = [s for t,s in sizes if t == c[0]]
+                 size_stats.append((c[0], c[1], sum(ss), sorted(ss)))
+             return total_size, deep_sizeof(globals()), deep_sizeof(gc.garbage), len(sys.modules), sum([deep_sizeof(mod.__dict__) for mod in sys.modules.values()]), size_stats
+
+         print("\n=== Worker Memory Usage ===")
+         print(self.dask_client.run(check_worker_memory))
+         print("\n=== Worker Object Listing ===")
+         print(self.dask_client.run(check_large_objects))
+
          self.dask_client.cancel(lastround)
          os.remove(my_context)
       with ROOT.TFile.Open(self.savetorootfile, "update") as fsaved:
