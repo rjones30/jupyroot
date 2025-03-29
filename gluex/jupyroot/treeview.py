@@ -28,6 +28,10 @@ import sys
 import socket
 import re
 import math
+import uuid
+import glob
+
+dask_logdir = ".dask"
 
 class treeview:
    """
@@ -290,13 +294,17 @@ class treeview:
          print("found", ntofill, "histograms that need filling,",
                "follow progress on dask monitor dashboard at",
                self.dask_dashboard_link())
+         unique_logdir = f"{os.getcwd()}/{dask_logdir}/{uuid.uuid4().hex}"
+         os.makedirs(unique_logdir, exist_ok=False)
          my_context = f".dask_context_{id(self)}.pkl"
          with open(my_context, "wb") as contextf:
              cloudpickle.dump(kwargs, contextf)
          infiles = [link for link in self.inputchain.GetListOfFiles()]
          if chunksize > 0:
             results = [dask.delayed(dask_treeplayer)(j, infiles[j:j+chunksize],
-                                    self.histodefs, context=my_context)
+                                                     self.histodefs, 
+                                                     logdir=unique_logdir,
+                                                     context=my_context)
                        for j in range(0, len(infiles), chunksize)]
          elif chunksize < 0:
             results = [dask.delayed(dask_treeplayer)(j, infiles[j:j+1],
@@ -316,6 +324,11 @@ class treeview:
                self.histodefs[hset]['filling'] = histodef['filling']
          self.dask_client.cancel(lastround)
          os.remove(my_context)
+         for badf in glob.glob(f"{unique_logdir}/*"):
+            badfile = badf.split('/')[-1]
+            print(f"warning: error processing input file {badfile}")
+            os.unlink(badf)
+         os.rmdir(unique_logdir)
       with ROOT.TFile.Open(self.savetorootfile, "update") as fsaved:
          if self.savetorootdir:
             ROOT.gDirectory.cd(self.savetorootdir)
@@ -579,7 +592,7 @@ class treeview:
             else:
                print(f"      '{keyword}':", histodef[keyword])
 
-def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), context=None):
+def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), logdir=None, context=None):
    """
    Static member function of treeview, called with dask_delayed
    to fill histograms from ROOT tree input files in parallel on
@@ -592,7 +605,9 @@ def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), context=None):
                  number of subdivisions of the total row count of the tree
                  in this input file, and n is the index in [0,N) of the
                  slice of rows in this input file to be processed.
-    5. context - name of a pickle file with a readonly dict containing
+    5. logdir - path of a directory to save logs of any input files
+                  that generated errors or crashed during processing.
+    6. context - name of a pickle file with a readonly dict containing
                  variables that are needed by the user fill function.
    Return value is the updated histodefs from argument 3.
    """
@@ -600,33 +615,49 @@ def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), context=None):
       with open(context, "rb") as contextf:
          kwargs = cloudpickle.load(contextf)
          locals().update(kwargs)
+   def loop_over_rows(infile):
+      nerrors = 0
+      froot = ROOT.TFile.Open(infile.GetTitle())
+      tree = ROOT.gDirectory.Get(infile.GetName())
+      nentries = tree.GetEntries()
+      nentries_per_slice = math.ceil(nentries / chunk[1])
+      nstart = nentries_per_slice * chunk[0]
+      nend = min(nentries, nstart + nentries_per_slice)
+      leaves = {leaf: 1 for hdef in histodefs.values() for leaf in hdef['leaves']}
+      if not "*" in leaves:
+         tree.SetBranchStatus("*", 0)
+         for branch in tree.GetListOfBranches():
+            for leaf in branch.GetListOfLeaves():
+               if leaf.GetName() in leaves:
+                  tree.SetBranchStatus(branch.GetName(), 1)
+      for row in range(nstart, nend):
+         tree.GetEntry(row)
+         for hset,histodef in histodefs.items():
+            if hset == "fill_histograms statistics":
+               histodef['fill'](j, histodef['filling'])
+            elif 'filling' in histodef:
+               try:
+                  histodef['fill'](tree, histodef['filling'])
+               except:
+                  nerrors += 1
+      return nerrors
    for infile in infiles:
+      nerrors = 0
       try:
-         froot = ROOT.TFile.Open(infile.GetTitle())
-         tree = ROOT.gDirectory.Get(infile.GetName())
-         nentries = tree.GetEntries()
-         nentries_per_slice = math.ceil(nentries / chunk[1])
-         nstart = nentries_per_slice * chunk[0]
-         nend = min(nentries, nstart + nentries_per_slice)
-         leaves = {leaf: 1 for hdef in histodefs.values() for leaf in hdef['leaves']}
-         if not "*" in leaves:
-            tree.SetBranchStatus("*", 0)
-            for branch in tree.GetListOfBranches():
-               for leaf in branch.GetListOfLeaves():
-                  if leaf.GetName() in leaves:
-                     tree.SetBranchStatus(branch.GetName(), 1)
-         for row in range(nstart, nend):
-            tree.GetEntry(row)
-            for hset,histodef in histodefs.items():
-               if hset == "fill_histograms statistics":
-                  histodef['fill'](j, histodef['filling'])
-               elif 'filling' in histodef:
-                  try:
-                     histodef['fill'](tree, histodef['filling'])
-                  except:
-                     pass
+         if logdir:
+            logfile = infile.GetTitle().split('/')[-1]
+            with open(f"{logdir}/{logfile}", "a") as logf:
+               nerrors = loop_over_rows(infile)
+            if nerrors > 0:
+               logf.write(f"{nerrors} errors occurred during " +
+                          f"processing of input file {logfile}")
+            else:
+               os.unlink(f"{logdir}/{logfile}")
+         else:
+            loop_over_rows(infile)
       except:
-         pass
+         if logdir and nerrors == 0:
+             os.unlink(f"{logdir}/{logfile}")
       j += 1
    return histodefs
 

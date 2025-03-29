@@ -26,6 +26,11 @@ import os
 import sys
 import socket
 import re
+import math
+import uuid
+import glob
+
+dask_logdir = ".dask"
 
 class hddmview:
    """
@@ -169,14 +174,14 @@ class hddmview:
       that need filling if any, otherwise return immediately. Return value
       is the number of histograms that were updated.
        * chunksize - (int) number of input files to process in one dask process,
-                     if negative then |chunksize| is the number of processes
-                     to dedicate per input file (for processing large files),
-                     only relevant if parallel dask algorithm is enabled
+                   if negative then |chunksize| is the number of processes
+                   to dedicate per input file (for processing large files),
+                   only relevant if parallel dask algorithm is enabled
        * accusmize - (int) number of chunks to gather together into a single
-                     accumulator step in the sum over parallel dask results,
-                     only relevant if parallel dask algorithm is enabled
+                   accumulator step in the sum over parallel dask results,
+                   only relevant if parallel dask algorithm is enabled
        * kwargs - any number of user-defined keyword arguments to be passed
-                     to the remote worker for use by the user fill function
+                   to the remote worker for use by the user fill function
       """
       workdir = ROOT.TDirectory(self.memorydir.GetName() + "_workspace",
                                 self.memorydir.GetTitle() + "_workspace")
@@ -218,12 +223,16 @@ class hddmview:
          print("found", ntofill, "histograms that need filling,",
                "follow progress on dask monitor dashboard at",
                self.dask_dashboard_link())
+         unique_logdir = f"{os.getcwd()}/{dask_logdir}/{uuid.uuid4().hex}"
+         os.makedirs(unique_logdir, exist_ok=False)
          my_context = f".dask_context_{id(self)}.pkl"
          with open(my_context, "wb") as contextf:
              cloudpickle.dump(kwargs, contextf)
          if chunksize > 0:
             results = [dask.delayed(dask_hddmplayer)(j, self.inputfiles[j:j+chunksize],
-                                    hddm_s, self.histodefs, context=my_context)
+                                                     hddm_s, self.histodefs, 
+                                                     logdir=unique_logdir,
+                                                     context=my_context)
                        for j in range(0, len(self.inputfiles), chunksize)]
          else:
             raise ValueError("hddmview.fill_histogram error -",
@@ -237,6 +246,11 @@ class hddmview:
                self.histodefs[hset]['filling'] = histodef['filling']
          self.dask_client.cancel(lastround)
          os.remove(my_context)
+         for badf in glob.glob(f"{unique_logdir}/*"):
+            badfile = badf.split('/')[-1]
+            print(f"warning: error processing input file {badfile}")
+            os.unlink(badf)
+         os.rmdir(unique_logdir)
       with ROOT.TFile.Open(self.savetorootfile, "update") as fsaved:
          if self.savetorootdir:
             ROOT.gDirectory.cd(self.savetorootdir)
@@ -500,7 +514,7 @@ class hddmview:
             else:
                print(f"      '{keyword}':", histodef[keyword])
 
-def dask_hddmplayer(j, infiles, hddmclass, histodefs, context=None):
+def dask_hddmplayer(j, infiles, hddmclass, histodefs, logdir=None, context=None):
    """
    Static member function of hddmview, called with dask_delayed
    to fill histograms from hddm input files in parallel on a
@@ -510,7 +524,9 @@ def dask_hddmplayer(j, infiles, hddmclass, histodefs, context=None):
     3. hddmclass - reference to hddm class, eg. hddm_s or hddm_r
     4. histodefs - copy of hddmview.histodefs structure with lists of TH1
                   histograms being filled under the key 'filling'.
-    5. context - name of a pickle file with a readonly dict containing
+    5. logdir - path of a directory to save logs of any input files
+                  that generated errors or crashed during processing.
+    6. context - name of a pickle file with a readonly dict containing
                  variables that are needed by the user fill function.
    Return value is the updated histodefs from argument 4.
    """
@@ -518,19 +534,35 @@ def dask_hddmplayer(j, infiles, hddmclass, histodefs, context=None):
       with open(context, "rb") as contextf:
          kwargs = cloudpickle.load(contextf)
          locals().update(kwargs)
+   def loop_over_events(infile):
+      nerrors = 0
+      for rec in hddmclass.istream(infile):
+         for hset,histodef in histodefs.items():
+            if hset == "fill_histograms statistics":
+               histodef['fill'](j, histodef['filling'])
+            elif 'filling' in histodef:
+               try:
+                  histodef['fill'](rec, histodef['filling'])
+               except:
+                  nerrors += 1
+      return nerrors
    for infile in infiles:
+      nerrors = 0
       try:
-         for rec in hddmclass.istream(infile):
-            for hset,histodef in histodefs.items():
-               if hset == "fill_histograms statistics":
-                  histodef['fill'](j, histodef['filling'])
-               elif 'filling' in histodef:
-                  try:
-                     histodef['fill'](rec, histodef['filling'])
-                  except:
-                     pass
+         if logdir:
+            logfile = infile.split('/')[-1]
+            with open(f"{logdir}/{logfile}", "a") as logf:
+               nerrors = loop_over_events(infile)
+            if nerrors > 0:
+               logf.write(f"{nerrors} errors occurred during " +
+                          f"processing of input file {logfile}")
+            else:
+               os.unlink(f"{logdir}/{logfile}")
+         else:
+            loop_over_events(infile)
       except:
-         pass
+         if logdir and nerrors == 0:
+             os.unlink(f"{logdir}/{logfile}")
       j += 1
    return histodefs
 
