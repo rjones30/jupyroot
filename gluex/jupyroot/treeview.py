@@ -238,7 +238,7 @@ class treeview:
                    if negative then |chunksize| is the number of processes
                    to dedicate per input file (for processing large files),
                    only relevant if parallel dask algorithm is enabled
-       * accusmize - (int) number of chunks to gather together into a single
+       * accumsize - (int) number of chunks to gather together into a single
                    accumulator step in the sum over parallel dask results,
                    only relevant if parallel dask algorithm is enabled
        * kwargs - any number of user-defined keyword arguments to be passed
