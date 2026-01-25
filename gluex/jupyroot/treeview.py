@@ -302,16 +302,19 @@ class treeview:
          infiles = [link for link in self.inputchain.GetListOfFiles()]
          if chunksize > 0:
             results = [dask.delayed(dask_treeplayer)(j, infiles[j:j+chunksize],
-                                                     self.histodefs, 
-                                                     logdir=unique_logdir,
-                                                     context=my_context)
-                       for j in range(0, len(infiles), chunksize)]
+                                    self.histodefs, 
+                                    logdir=unique_logdir,
+                                    context=my_context)
+                       for j in range(0, len(infiles), chunksize)
+                      ]
          elif chunksize < 0:
             results = [dask.delayed(dask_treeplayer)(j, infiles[j:j+1],
                                     self.histodefs, chunk=(i, -chunksize),
+                                    logdir=unique_logdir,
                                     context=my_context)
                        for j in range(0, len(infiles))
-                       for i in range(0, -chunksize)]
+                       for i in range(0, -chunksize)
+                      ]
          else:
             raise ValueError("hddmview.fill_histogram error -",
                              "zero chunksize is not allowed in this release")
@@ -600,13 +603,13 @@ def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), logdir=None, context=Non
     1. j - (int) starting index of file for this process
     2. infiles - list of name and path or url to the input ROOT tree
     3. histodefs - copy of treeview.histodefs structure with lists of TH1
-                 histograms being filled under the key 'filling'.
+                   histograms being filled under the key 'filling'.
     4. chunk - [int, int] is defined as the pair (n,N) where N is the 
                  number of subdivisions of the total row count of the tree
                  in this input file, and n is the index in [0,N) of the
                  slice of rows in this input file to be processed.
     5. logdir - path of a directory to save logs of any input files
-                  that generated errors or crashed during processing.
+                that generated errors or crashed during processing.
     6. context - name of a pickle file with a readonly dict containing
                  variables that are needed by the user fill function.
    Return value is the updated histodefs from argument 3.
@@ -618,7 +621,7 @@ def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), logdir=None, context=Non
    def loop_over_rows(infile):
       nerrors = 0
       froot = ROOT.TFile.Open(infile.GetTitle())
-      tree = ROOT.gDirectory.Get(infile.GetName())
+      tree = froot.Get(infile.GetName())
       nentries = tree.GetEntries()
       nentries_per_slice = math.ceil(nentries / chunk[1])
       nstart = nentries_per_slice * chunk[0]
@@ -642,22 +645,14 @@ def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), logdir=None, context=Non
                   nerrors += 1
       return nerrors
    for infile in infiles:
-      nerrors = 0
       try:
-         if logdir:
-            logfile = infile.GetTitle().split('/')[-1]
-            with open(f"{logdir}/{logfile}", "a") as logf:
-               nerrors = loop_over_rows(infile)
-            if nerrors > 0:
-               logf.write(f"{nerrors} errors occurred during " +
-                          f"processing of input file {logfile}")
-            else:
-               os.unlink(f"{logdir}/{logfile}")
-         else:
-            loop_over_rows(infile)
+         nerrors = loop_over_rows(infile)
       except:
-         if logdir and nerrors == 0:
-             os.unlink(f"{logdir}/{logfile}")
+         nerrors = 1
+      if logdir and nerrors > 0:
+         with open(f"{logdir}/{logfile}", "a") as logf:
+            logf.write(f"{nerrors} errors occurred during " +
+                       f"processing of input file {logfile}\n")
       j += 1
    return histodefs
 
