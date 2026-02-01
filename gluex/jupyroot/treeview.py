@@ -22,6 +22,8 @@ import cloudpickle
 from pyxrootd import client as xclient
 import IPython.display
 import inspect
+import ctypes
+import re
 
 import os
 import sys
@@ -32,6 +34,60 @@ import uuid
 import glob
 
 dask_logdir = ".dask"
+
+import numpy as np
+from array import array
+from types import SimpleNamespace
+
+def parse_root_struct_to_dtype(format_string):
+    """
+    Converts a ROOT format string (leaf-list) into a NumPy dtype list.
+    Example input: "runno/I:eventno/I:q[32]/D:status/I"
+    """
+    # Mapping ROOT type codes to NumPy dtypes
+    # Codes: C:char, B:byte, b:ubyte, S:short, s:ushort, I:int, i:uint, F:float, D:double, L:long, l:ulong
+    TYPE_MAP = {
+        'C': np.int8,    'B': np.int8,   'b': np.uint8,
+        'S': np.int16,   's': np.uint16,
+        'I': np.int32,   'i': np.uint32,
+        'L': np.int64,   'l': np.uint64,
+        'F': np.float32, 'D': np.float64,
+        'O': np.bool_
+    }
+    
+    dtype_list = []
+    
+    # ROOT format strings are delimited by colons
+    leaves = format_string.split(':')
+    
+    for leaf in leaves:
+        # Match pattern: name[optional_dim]/type_code
+        match = re.match(r"(\w+)(?:\[(\d+)\])?/([a-zA-Z])", leaf)
+        if not match:
+            continue
+            
+        name, dim, code = match.groups()
+        base_type = TYPE_MAP.get(code, np.float64)
+        
+        if dim:
+            # It's an array: (name, type, shape)
+            dtype_list.append((name, base_type, (int(dim),)))
+        else:
+            # It's a scalar: (name, type)
+            dtype_list.append((name, base_type))
+            
+    return dtype_list
+
+ROOT_TYPE_MAP = {
+    "Int_t": "i",
+    "UInt_t": "I",
+    "Double_t": "d",
+    "Float_t": "f",
+    "Long64_t": "l",
+    "ULong64_t": "L",
+    "Bool_t": "b",
+    "Char_t": "b",
+}
 
 class treeview:
    """
@@ -258,6 +314,7 @@ class treeview:
       ntofill = 0
       for hset,histodef in self.histodefs.items():
          histos = histodef['init']()
+         [histos[histo].SetDirectory(0) for histo in histos]
          with ROOT.TFile.Open(self.savetorootfile) as fsaved:
             if self.savetorootdir:
                ROOT.gDirectory.cd(self.savetorootdir)
@@ -622,6 +679,7 @@ def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), logdir=None, context=Non
       nerrors = 0
       froot = ROOT.TFile.Open(infile.GetTitle())
       tree = froot.Get(infile.GetName())
+      tree.SetCacheSize(0)
       nentries = tree.GetEntries()
       nentries_per_slice = math.ceil(nentries / chunk[1])
       nstart = nentries_per_slice * chunk[0]
@@ -629,10 +687,22 @@ def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), logdir=None, context=Non
       leaves = {leaf: 1 for hdef in histodefs.values() for leaf in hdef['leaves']}
       if not "*" in leaves:
          tree.SetBranchStatus("*", 0)
-         for branch in tree.GetListOfBranches():
-            for leaf in branch.GetListOfLeaves():
-               if leaf.GetName() in leaves:
-                  tree.SetBranchStatus(branch.GetName(), 1)
+      buffers = {}
+      master_buffer = {}
+      for branch in tree.GetListOfBranches():
+         for leaf in branch.GetListOfLeaves():
+            lname = leaf.GetName()
+            if lname in leaves:
+               bname = branch.GetName()
+               if not bname in buffers:
+                  bform = branch.GetTitle()
+                  dtype_list = parse_root_struct_to_dtype(bform)
+                  buffers[bname] = np.zeros(1, dtype=dtype_list)
+                  tree.SetBranchStatus(bname, 1)
+                  baddr = buffers[bname].__array_interface__['data'][0]
+                  branch.SetAddress(ctypes.c_void_p(baddr))
+               master_buffer[lname] = buffers[bname][0][lname]
+      rowdata = SimpleNamespace(**master_buffer)
       for row in range(nstart, nend):
          tree.GetEntry(row)
          for hset,histodef in histodefs.items():
@@ -640,9 +710,11 @@ def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), logdir=None, context=Non
                histodef['fill'](j, histodef['filling'])
             elif 'filling' in histodef:
                try:
-                  histodef['fill'](tree, histodef['filling'])
+                  histodef['fill'](rowdata, histodef['filling'])
                except:
                   nerrors += 1
+      tree.ResetBranchAddresses()
+      froot.Close()
       return nerrors
    for infile in infiles:
       try:
@@ -650,10 +722,14 @@ def dask_treeplayer(j, infiles, histodefs, chunk=(0,1), logdir=None, context=Non
       except:
          nerrors = 1
       if logdir and nerrors > 0:
-         with open(f"{logdir}/{logfile}", "a") as logf:
+         with open(f"{logdir}/dask_treemaker.err", "a") as logf:
             logf.write(f"{nerrors} errors occurred during " +
-                       f"processing of input file {logfile}\n")
+                       f"processing of input file {infile}\n")
       j += 1
+   if False:
+      global treeplayer_task_id
+      treeplayer_task_id += 1
+      log_worker_stats(treeplayer_task_id, nerrors, "dask_treeplayer")
    return histodefs
 
 def dask_collector(results):
@@ -678,4 +754,69 @@ def dask_collector(results):
             else:
                for result in results[1:]:
                   resultsum[hset]['filling'][h].Add(result[hset]['filling'][h])
+   if False:
+      global collector_task_id
+      collector_task_id += 1
+      log_worker_stats(collector_task_id, 0, "dask_collector")
    return resultsum
+
+# Diagnostic tool section, disabled for production
+
+import psutil
+import gc
+import json
+from datetime import datetime
+from collections import Counter
+
+collector_task_id = 0
+treeplayer_task_id = 0
+
+def log_worker_stats(task_id, nerrors, function_name):
+    # Keep the trim to see if it actually releases pages to the OS
+    ctypes.CDLL('libc.so.6').malloc_trim(0)
+
+    pid = os.getpid()
+    log_path = f"treeview/worker_{pid}.log"
+    process = psutil.Process(pid)
+    
+    # Core memory metrics
+    total_rss = process.memory_info().rss
+    vms = process.memory_info().vms
+    
+    # HEAP TRIAGE: Check the C++ Global Directory
+    # This tells us if objects (Trees, Histos) are orphaning in the C++ layer
+    root_gdirectory_count = ROOT.gDirectory.GetList().GetSize()
+    
+    # Check the total number of Baskets currently in memory (The "Clog" candidate)
+    # This tracks uncompressed TTree data buffers
+    total_baskets = 0
+    try:
+        # This is a broad check for any TTree currently resident in the C++ heap
+        for t in ROOT.gROOT.GetListOfSpecials():
+            if isinstance(t, ROOT.TTree):
+                total_baskets += t.GetTotBytes()
+    except:
+        pass
+
+    # Simplified Python check (just the total size, no more expensive Counter)
+    gc.collect()
+    python_obj_size = sum(sys.getsizeof(obj) for obj in gc.get_objects())
+    non_python_heap = total_rss - python_obj_size
+
+    # Check the number of memory maps (high counts indicate fragmentation/leaks)
+    with open(f"/proc/{pid}/maps", "r") as map_file:
+        num_maps = len(map_file.readlines())
+
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "task_id": task_id,
+        "rss_mb": total_rss / 1024 / 1024,
+        "non_python_heap_mb": non_python_heap / 1024 / 1024,
+        "cpp_obj_count": root_gdirectory_count, # Are we orphaning C++ objects?
+        "basket_bytes": total_baskets,         # Is it uncompressed row data?
+        "streamer_count": ROOT.gROOT.GetListOfStreamerInfo().GetEntries(), # Verify stability
+        "num_maps": num_maps,
+    }
+
+    with open(log_path, "a") as f:
+        f.write(json.dumps(log_entry) + "\n")
