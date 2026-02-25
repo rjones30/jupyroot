@@ -2,9 +2,19 @@ from setuptools import setup, find_packages
 
 setup(
     name='gluex.jupyroot',
-    version='1.0.20',
+    version='1.0.21',
     packages=['gluex.jupyroot'],
-    install_requires=[],  # Add dependencies here if any
+    install_requires=[
+        "dask",
+        "distributed",
+        "cloudpickle",
+        "numpy",
+        "psutil",
+        "pyxrootd",
+        "ipython",
+        "gluex.hddm_s",
+        "gluex.hddm_r",
+    ]
     description='Automate common data analysis and visualization tasks using the CERN pyroot library in a jupyter notebook.',
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
