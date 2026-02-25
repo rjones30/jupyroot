@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='gluex.jupyroot',
-    version='1.0.22',
+    version='1.0.23',
     packages=['gluex.jupyroot'],
     install_requires=[
         "dask",
@@ -20,6 +20,7 @@ setup(
     url='https://github.com/rjones30/jupyroot',
     author='Richard Jones',
     author_email='richard.t.jones@uconn.edu',
+    license="GPLv3",
     classifiers=[
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)',
