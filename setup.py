@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='gluex.jupyroot',
-    version='1.0.21',
+    version='1.0.22',
     packages=['gluex.jupyroot'],
     install_requires=[
         "dask",
@@ -10,7 +10,6 @@ setup(
         "cloudpickle",
         "numpy",
         "psutil",
-        "pyxrootd",
         "ipython",
         "gluex.hddm_s",
         "gluex.hddm_r",
