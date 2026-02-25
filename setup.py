@@ -14,7 +14,7 @@ setup(
         "ipython",
         "gluex.hddm_s",
         "gluex.hddm_r",
-    ]
+    ],
     description='Automate common data analysis and visualization tasks using the CERN pyroot library in a jupyter notebook.',
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
